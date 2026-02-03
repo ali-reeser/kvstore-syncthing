@@ -1,0 +1,45 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: requirements-dev.txt
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Development Dependencies
+# ===============================================================================
+
+# Testing
+pytest>=7.4.0
+pytest-bdd>=7.0.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+
+# Type checking
+mypy>=1.5.0
+
+# Linting
+flake8>=6.1.0
+black>=23.7.0
+isort>=5.12.0
+
+# Documentation
+sphinx>=7.2.0
+
+# Splunk SDK (for development/testing)
+splunk-sdk>=1.7.4
+
+# MongoDB (for development/testing)
+pymongo>=4.5.0
+
+# AWS (for S3 handler testing)
+boto3>=1.28.0
+moto>=4.2.0
+
+# HTTP
+requests>=2.31.0
+httpx>=0.24.0
+
+# Utilities
+python-dateutil>=2.8.2
+pydantic>=2.3.0
