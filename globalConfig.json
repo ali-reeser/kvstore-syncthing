@@ -1,0 +1,560 @@
+{
+    "meta": {
+        "name": "kvstore_syncthing",
+        "displayName": "KVStore Syncthing",
+        "version": "1.0.0",
+        "restRoot": "kvstore_syncthing",
+        "schemaVersion": "0.0.3"
+    },
+    "pages": {
+        "configuration": {
+            "title": "Configuration",
+            "description": "Configure KVStore Syncthing settings",
+            "tabs": [
+                {
+                    "name": "destinations",
+                    "title": "Sync Destinations",
+                    "entity": [
+                        {
+                            "field": "name",
+                            "label": "Destination Name",
+                            "type": "text",
+                            "required": true,
+                            "help": "Unique identifier for this sync destination",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 50,
+                                    "errorMsg": "Name must be 1-50 characters"
+                                },
+                                {
+                                    "type": "regex",
+                                    "pattern": "^[a-zA-Z0-9_-]+$",
+                                    "errorMsg": "Name can only contain letters, numbers, underscores, and hyphens"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "destination_type",
+                            "label": "Destination Type",
+                            "type": "singleSelect",
+                            "required": true,
+                            "defaultValue": "splunk_rest",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {"value": "splunk_rest", "label": "Splunk REST API"},
+                                    {"value": "splunk_hec", "label": "Splunk HEC (Index & Rehydrate)"},
+                                    {"value": "s3_export", "label": "AWS S3 Export"},
+                                    {"value": "file_export", "label": "File Export"}
+                                ]
+                            },
+                            "help": "Method used to sync data to this destination"
+                        },
+                        {
+                            "field": "host",
+                            "label": "Host",
+                            "type": "text",
+                            "required": true,
+                            "help": "Hostname or IP address of the destination",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255,
+                                    "errorMsg": "Host is required"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "port",
+                            "label": "Port",
+                            "type": "text",
+                            "required": true,
+                            "defaultValue": "8089",
+                            "help": "Port number for the destination service",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "range": [1, 65535],
+                                    "errorMsg": "Port must be between 1 and 65535"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "use_ssl",
+                            "label": "Use SSL",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Enable SSL/TLS encryption for connections"
+                        },
+                        {
+                            "field": "verify_ssl",
+                            "label": "Verify SSL Certificate",
+                            "type": "checkbox",
+                            "defaultValue": false,
+                            "help": "Verify SSL certificate validity (disable for self-signed certs)"
+                        },
+                        {
+                            "field": "auth_type",
+                            "label": "Authentication Type",
+                            "type": "singleSelect",
+                            "required": true,
+                            "defaultValue": "token",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {"value": "token", "label": "Splunk Auth Token"},
+                                    {"value": "basic", "label": "Username/Password"},
+                                    {"value": "session", "label": "Session Key"}
+                                ]
+                            },
+                            "help": "Authentication method for this destination"
+                        },
+                        {
+                            "field": "username",
+                            "label": "Username",
+                            "type": "text",
+                            "required": false,
+                            "help": "Username for basic authentication"
+                        },
+                        {
+                            "field": "password",
+                            "label": "Password / Token",
+                            "type": "text",
+                            "encrypted": true,
+                            "required": true,
+                            "help": "Password or authentication token",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "errorMsg": "Password/Token is required"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "target_app",
+                            "label": "Target App",
+                            "type": "text",
+                            "required": true,
+                            "defaultValue": "search",
+                            "help": "Splunk app context for KVStore operations"
+                        },
+                        {
+                            "field": "target_owner",
+                            "label": "Target Owner",
+                            "type": "text",
+                            "required": true,
+                            "defaultValue": "nobody",
+                            "help": "Splunk user context for KVStore operations"
+                        },
+                        {
+                            "field": "connection_timeout",
+                            "label": "Connection Timeout (seconds)",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "30",
+                            "help": "Timeout for establishing connections",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "range": [1, 300],
+                                    "errorMsg": "Timeout must be between 1 and 300 seconds"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "max_retries",
+                            "label": "Max Retries",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "3",
+                            "help": "Maximum retry attempts for failed operations",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "range": [0, 10],
+                                    "errorMsg": "Retries must be between 0 and 10"
+                                }
+                            ]
+                        }
+                    ],
+                    "table": {
+                        "header": [
+                            {"field": "name", "label": "Name"},
+                            {"field": "destination_type", "label": "Type"},
+                            {"field": "host", "label": "Host"},
+                            {"field": "port", "label": "Port"}
+                        ],
+                        "actions": ["edit", "delete", "clone"]
+                    }
+                },
+                {
+                    "name": "sync_profiles",
+                    "title": "Sync Profiles",
+                    "entity": [
+                        {
+                            "field": "name",
+                            "label": "Profile Name",
+                            "type": "text",
+                            "required": true,
+                            "help": "Unique identifier for this sync profile",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "pattern": "^[a-zA-Z0-9_-]+$",
+                                    "errorMsg": "Name can only contain letters, numbers, underscores, and hyphens"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "sync_mode",
+                            "label": "Sync Mode",
+                            "type": "singleSelect",
+                            "required": true,
+                            "defaultValue": "incremental",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {"value": "full_sync", "label": "Full Sync - Replace all records"},
+                                    {"value": "incremental", "label": "Incremental - Only changed records"},
+                                    {"value": "append_only", "label": "Append Only - Never update existing"},
+                                    {"value": "master_slave", "label": "Master/Slave - Exact replica"}
+                                ]
+                            },
+                            "help": "How records are synchronized to the destination"
+                        },
+                        {
+                            "field": "conflict_resolution",
+                            "label": "Conflict Resolution",
+                            "type": "singleSelect",
+                            "required": true,
+                            "defaultValue": "source_wins",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {"value": "source_wins", "label": "Source Wins"},
+                                    {"value": "destination_wins", "label": "Destination Wins"},
+                                    {"value": "newest_wins", "label": "Newest Wins (by timestamp)"},
+                                    {"value": "merge", "label": "Merge Fields"}
+                                ]
+                            },
+                            "help": "How to resolve conflicts when records differ"
+                        },
+                        {
+                            "field": "batch_size",
+                            "label": "Batch Size",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "1000",
+                            "help": "Number of records per batch",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "range": [1, 10000],
+                                    "errorMsg": "Batch size must be between 1 and 10000"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "delete_orphans",
+                            "label": "Delete Orphaned Records",
+                            "type": "checkbox",
+                            "defaultValue": false,
+                            "help": "Delete destination records not present in source"
+                        },
+                        {
+                            "field": "timestamp_field",
+                            "label": "Timestamp Field",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "_updated",
+                            "help": "Field used for incremental sync and conflict resolution"
+                        },
+                        {
+                            "field": "field_exclusions",
+                            "label": "Excluded Fields",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "_user,_raw",
+                            "help": "Comma-separated list of fields to exclude from sync"
+                        }
+                    ],
+                    "table": {
+                        "header": [
+                            {"field": "name", "label": "Name"},
+                            {"field": "sync_mode", "label": "Mode"},
+                            {"field": "conflict_resolution", "label": "Conflict Resolution"},
+                            {"field": "batch_size", "label": "Batch Size"}
+                        ],
+                        "actions": ["edit", "delete", "clone"]
+                    }
+                },
+                {
+                    "name": "collection_mappings",
+                    "title": "Collection Mappings",
+                    "entity": [
+                        {
+                            "field": "name",
+                            "label": "Mapping Name",
+                            "type": "text",
+                            "required": true,
+                            "help": "Unique identifier for this collection mapping"
+                        },
+                        {
+                            "field": "source_app",
+                            "label": "Source App",
+                            "type": "text",
+                            "required": true,
+                            "defaultValue": "search",
+                            "help": "Source Splunk app containing the collection"
+                        },
+                        {
+                            "field": "source_collection",
+                            "label": "Source Collection",
+                            "type": "text",
+                            "required": true,
+                            "help": "Name of the source KVStore collection"
+                        },
+                        {
+                            "field": "source_owner",
+                            "label": "Source Owner",
+                            "type": "text",
+                            "required": true,
+                            "defaultValue": "nobody",
+                            "help": "Owner context for source collection"
+                        },
+                        {
+                            "field": "destination_collection",
+                            "label": "Destination Collection",
+                            "type": "text",
+                            "required": true,
+                            "help": "Name of the destination KVStore collection (can be same as source)"
+                        },
+                        {
+                            "field": "auto_create_collection",
+                            "label": "Auto-Create Collection",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Create destination collection if it doesn't exist"
+                        },
+                        {
+                            "field": "sync_schema",
+                            "label": "Sync Schema",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Copy collection schema to destination"
+                        },
+                        {
+                            "field": "enabled",
+                            "label": "Enabled",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Enable this collection mapping"
+                        }
+                    ],
+                    "table": {
+                        "header": [
+                            {"field": "name", "label": "Name"},
+                            {"field": "source_collection", "label": "Source"},
+                            {"field": "destination_collection", "label": "Destination"},
+                            {"field": "enabled", "label": "Enabled"}
+                        ],
+                        "actions": ["edit", "delete", "clone"]
+                    }
+                },
+                {
+                    "name": "token_management",
+                    "title": "Token Management",
+                    "entity": [
+                        {
+                            "field": "master_token",
+                            "label": "Master Service Token",
+                            "type": "text",
+                            "encrypted": true,
+                            "required": true,
+                            "help": "Master token with user/role creation capabilities for surrogate accounts"
+                        },
+                        {
+                            "field": "auto_rotate_tokens",
+                            "label": "Auto-Rotate Tokens",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Automatically rotate sync tokens on schedule"
+                        },
+                        {
+                            "field": "rotation_interval_days",
+                            "label": "Rotation Interval (days)",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "7",
+                            "help": "Days between automatic token rotations",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "range": [1, 365],
+                                    "errorMsg": "Interval must be between 1 and 365 days"
+                                }
+                            ]
+                        },
+                        {
+                            "field": "rotation_time_utc",
+                            "label": "Rotation Time (UTC)",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "02:00",
+                            "help": "Time of day to perform rotations (HH:MM format)"
+                        },
+                        {
+                            "field": "grace_period_minutes",
+                            "label": "Grace Period (minutes)",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "30",
+                            "help": "Time old tokens remain valid after rotation"
+                        },
+                        {
+                            "field": "create_surrogate_accounts",
+                            "label": "Create Surrogate Accounts",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Automatically create service accounts for each destination"
+                        }
+                    ]
+                },
+                {
+                    "name": "logging",
+                    "title": "Logging",
+                    "entity": [
+                        {
+                            "field": "log_level",
+                            "label": "Log Level",
+                            "type": "singleSelect",
+                            "required": true,
+                            "defaultValue": "INFO",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {"value": "DEBUG", "label": "DEBUG"},
+                                    {"value": "INFO", "label": "INFO"},
+                                    {"value": "WARNING", "label": "WARNING"},
+                                    {"value": "ERROR", "label": "ERROR"}
+                                ]
+                            },
+                            "help": "Logging verbosity level"
+                        }
+                    ]
+                }
+            ]
+        },
+        "inputs": {
+            "title": "Sync Jobs",
+            "description": "Configure scheduled synchronization jobs",
+            "table": {
+                "header": [
+                    {"field": "name", "label": "Job Name"},
+                    {"field": "destination", "label": "Destination"},
+                    {"field": "sync_profile", "label": "Profile"},
+                    {"field": "interval", "label": "Interval"},
+                    {"field": "disabled", "label": "Status"}
+                ],
+                "moreInfo": [
+                    {"field": "collection_mappings", "label": "Collections"},
+                    {"field": "last_run", "label": "Last Run"},
+                    {"field": "next_run", "label": "Next Run"}
+                ],
+                "actions": ["edit", "delete", "clone", "enable"]
+            },
+            "services": [
+                {
+                    "name": "kvstore_sync_job",
+                    "title": "KVStore Sync Job",
+                    "entity": [
+                        {
+                            "field": "name",
+                            "label": "Job Name",
+                            "type": "text",
+                            "required": true,
+                            "help": "Unique name for this sync job"
+                        },
+                        {
+                            "field": "destination",
+                            "label": "Destination",
+                            "type": "singleSelect",
+                            "required": true,
+                            "options": {
+                                "endpointUrl": "kvstore_syncthing_destinations",
+                                "labelField": "name",
+                                "valueField": "name"
+                            },
+                            "help": "Target destination for this sync job"
+                        },
+                        {
+                            "field": "sync_profile",
+                            "label": "Sync Profile",
+                            "type": "singleSelect",
+                            "required": true,
+                            "options": {
+                                "endpointUrl": "kvstore_syncthing_sync_profiles",
+                                "labelField": "name",
+                                "valueField": "name"
+                            },
+                            "help": "Sync profile to use for this job"
+                        },
+                        {
+                            "field": "collection_mappings",
+                            "label": "Collection Mappings",
+                            "type": "multipleSelect",
+                            "required": true,
+                            "options": {
+                                "endpointUrl": "kvstore_syncthing_collection_mappings",
+                                "labelField": "name",
+                                "valueField": "name"
+                            },
+                            "help": "Collections to sync with this job"
+                        },
+                        {
+                            "field": "interval",
+                            "label": "Interval",
+                            "type": "interval",
+                            "required": true,
+                            "defaultValue": "3600",
+                            "help": "How often to run this sync job"
+                        },
+                        {
+                            "field": "retry_on_failure",
+                            "label": "Retry on Failure",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Automatically retry failed sync operations"
+                        },
+                        {
+                            "field": "max_retry_attempts",
+                            "label": "Max Retry Attempts",
+                            "type": "text",
+                            "required": false,
+                            "defaultValue": "3",
+                            "help": "Maximum number of retry attempts"
+                        },
+                        {
+                            "field": "alert_on_failure",
+                            "label": "Alert on Failure",
+                            "type": "checkbox",
+                            "defaultValue": true,
+                            "help": "Send alert when sync job fails"
+                        }
+                    ]
+                }
+            ]
+        },
+        "dashboard": {
+            "panels": [
+                {
+                    "name": "sync_status"
+                }
+            ]
+        }
+    }
+}
