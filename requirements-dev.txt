@@ -6,40 +6,62 @@
 # Author: Claude (AI Assistant - claude-opus-4-5-20251101)
 # Session: claude/kvstore-sync-solution-vPJQI
 # Type: Development Dependencies
+#
+# SDK REQUIREMENTS (from BDD contracts):
+# - splunk-sdk: REQUIRED for all Splunk API interactions
+# - vcrpy: REQUIRED for API test fixtures with deidentified data
+# - NO raw requests/urllib for Splunk endpoints
 # ===============================================================================
 
-# Testing
+# =============================================================================
+# REQUIRED ENTERPRISE SDKs
+# =============================================================================
+
+# Splunk SDK - MANDATORY for all Splunk API interactions
+# Per BDD contracts: NO raw HTTP clients for Splunk endpoints
+splunk-sdk==1.7.4
+
+# VCR for API test fixtures - MANDATORY per BDD contracts
+# All API tests must use VCR cassettes with deidentified data
+vcrpy==5.1.0
+
+# =============================================================================
+# Testing Framework
+# =============================================================================
 pytest>=7.4.0
 pytest-bdd>=7.0.0
 pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0
+pytest-vcr>=1.0.2  # VCR integration with pytest
 
-# Type checking
+# =============================================================================
+# Type Checking and Code Quality
+# =============================================================================
 mypy>=1.5.0
-
-# Linting
 flake8>=6.1.0
 black>=23.7.0
 isort>=5.12.0
 
+# =============================================================================
 # Documentation
+# =============================================================================
 sphinx>=7.2.0
 
-# Splunk SDK (for development/testing)
-splunk-sdk>=1.7.4
+# =============================================================================
+# Optional Handler Dependencies (for specific destination types)
+# =============================================================================
 
-# MongoDB (for development/testing)
+# MongoDB handler (optional - for direct MongoDB connections)
 pymongo>=4.5.0
 
-# AWS (for S3 handler testing)
+# AWS S3 handler (optional - for S3 export destination)
 boto3>=1.28.0
-moto>=4.2.0
+moto>=4.2.0  # For AWS mocking in tests
 
-# HTTP
-requests>=2.31.0
-httpx>=0.24.0
-
+# =============================================================================
 # Utilities
+# =============================================================================
 python-dateutil>=2.8.2
 pydantic>=2.3.0
+PyYAML>=6.0.1  # For VCR cassette files
