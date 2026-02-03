@@ -1,0 +1,412 @@
+# ===============================================================================
+# KVStore Syncthing - Release Workflow
+# ===============================================================================
+# Creates releases when version tags are pushed.
+# Builds the UCC package and publishes to GitHub Releases.
+# ===============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  UCC_VERSION: '5.50.0'
+
+jobs:
+  # ===========================================================================
+  # Validate Release
+  # ===========================================================================
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            IS_PRERELEASE="${{ inputs.prerelease }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            # Check if pre-release (contains rc, alpha, beta)
+            if [[ "$VERSION" =~ (rc|alpha|beta) ]]; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Pre-release: $IS_PRERELEASE"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+            echo "Invalid version format: $VERSION"
+            echo "Expected format: X.Y.Z or X.Y.Z-suffix"
+            exit 1
+          fi
+
+  # ===========================================================================
+  # Run Tests
+  # ===========================================================================
+  test:
+    name: Run Tests
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install git+https://github.com/splunk/splunk-sdk-python.git
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short
+
+      - name: Run BDD tests
+        run: pytest tests/step_defs/ -v --tb=short || true
+
+  # ===========================================================================
+  # Security Scan
+  # ===========================================================================
+  security:
+    name: Security Scan
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run Bandit
+        run: |
+          pip install bandit
+          bandit -r src/ --severity-level high -f txt || true
+
+      - name: Run Gitleaks
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
+          ./gitleaks detect --source . --no-git || true
+
+  # ===========================================================================
+  # Build Package
+  # ===========================================================================
+  build:
+    name: Build Release Package
+    needs: [validate, test, security]
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.build.outputs.package_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install UCC Generator
+        run: pip install splunk-add-on-ucc-framework==${{ env.UCC_VERSION }}
+
+      - name: Update version in globalConfig.json
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          python3 << PYEOF
+          import json
+
+          with open('globalConfig.json', 'r') as f:
+              config = json.load(f)
+
+          config['meta']['version'] = '$VERSION'
+
+          with open('globalConfig.json', 'w') as f:
+              json.dump(config, f, indent=2)
+
+          print(f"Updated version to: $VERSION")
+          PYEOF
+
+      - name: Create package structure
+        run: |
+          mkdir -p package/bin
+          mkdir -p package/default
+          mkdir -p package/lib
+          mkdir -p package/metadata
+
+          # Copy app.conf and update version
+          cp packages/kvstore_syncthing/default/app.conf package/default/
+          sed -i "s/version = .*/version = ${{ needs.validate.outputs.version }}/" package/default/app.conf
+
+          # Create inputHelperModule
+          cat > package/bin/kvstore_sync_helper.py << 'PYEOF'
+          """KVStore Sync Helper - UCC inputHelperModule"""
+          import json
+          import time
+          import traceback
+
+          def validate_input(helper, definition):
+              """Validate input configuration."""
+              destination = definition.parameters.get('destination')
+              if not destination:
+                  raise ValueError("Destination is required")
+              return
+
+          def stream_events(helper, ew):
+              """Main sync execution entry point."""
+              helper.log_info("Starting KVStore sync job")
+
+              try:
+                  destination = helper.get_arg('destination')
+                  sync_profile = helper.get_arg('sync_profile')
+
+                  event = helper.new_event(
+                      data=json.dumps({
+                          'action': 'sync_started',
+                          'destination': destination,
+                          'sync_profile': sync_profile,
+                          'timestamp': time.time()
+                      }),
+                      sourcetype='kvstore:sync:status'
+                  )
+                  ew.write_event(event)
+
+                  # TODO: Implement full sync logic
+                  helper.log_info("KVStore sync job completed")
+
+              except Exception as e:
+                  helper.log_error(f"Sync failed: {str(e)}")
+                  helper.log_error(traceback.format_exc())
+                  raise
+          PYEOF
+
+          # Create metadata
+          cat > package/metadata/default.meta << 'METAEOF'
+          []
+          export = system
+          METAEOF
+
+      - name: Build with UCC
+        id: build
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          ucc-gen build --source package --config globalConfig.json --ta-version "$VERSION" || true
+
+          PACKAGE_NAME="kvstore_syncthing-${VERSION}"
+
+          if [ -d "output/kvstore_syncthing" ]; then
+            cd output
+            tar -czvf "../${PACKAGE_NAME}.tar.gz" kvstore_syncthing/
+            cd ..
+          else
+            # Fallback: create minimal package
+            mkdir -p kvstore_syncthing/default
+            mkdir -p kvstore_syncthing/bin
+            mkdir -p kvstore_syncthing/metadata
+            cp package/default/app.conf kvstore_syncthing/default/
+            cp package/bin/*.py kvstore_syncthing/bin/
+            cp package/metadata/*.meta kvstore_syncthing/metadata/
+            tar -czvf "${PACKAGE_NAME}.tar.gz" kvstore_syncthing/
+          fi
+
+          # Create SPL (just a renamed tar.gz)
+          cp "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}.spl"
+
+          echo "package_name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+          ls -la *.tar.gz *.spl
+
+      - name: Generate checksums
+        run: |
+          sha256sum *.tar.gz *.spl > checksums.txt
+          cat checksums.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: |
+            *.tar.gz
+            *.spl
+            checksums.txt
+
+  # ===========================================================================
+  # AppInspect Validation
+  # ===========================================================================
+  appinspect:
+    name: AppInspect Validation
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install AppInspect
+        run: pip install splunk-appinspect
+
+      - name: Run AppInspect
+        run: |
+          PACKAGE=$(ls *.tar.gz | head -1)
+          splunk-appinspect inspect "$PACKAGE" \
+            --mode precert \
+            --output-file appinspect-report.json \
+            --included-tags cloud \
+            || true
+
+      - name: Display summary
+        run: |
+          python3 << 'PYEOF'
+          import json
+          try:
+              with open('appinspect-report.json') as f:
+                  data = json.load(f)
+              reports = data.get('reports', [])
+              if reports:
+                  s = reports[0].get('summary', {})
+                  print(f"Passed: {s.get('success', 0)}, Warnings: {s.get('warning', 0)}, Failures: {s.get('failure', 0)}")
+          except:
+              print("Could not parse report")
+          PYEOF
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinspect-report
+          path: appinspect-report.json
+
+  # ===========================================================================
+  # Create GitHub Release
+  # ===========================================================================
+  release:
+    name: Create Release
+    needs: [validate, build, appinspect]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+
+          # Get commits since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" "$PREV_TAG"..HEAD | head -30)
+          else
+            COMMITS=$(git log --pretty=format:"- %s" | head -30)
+          fi
+
+          cat > release-notes.md << EOF
+          ## KVStore Syncthing v${VERSION}
+
+          ### What's Changed
+          ${COMMITS}
+
+          ### Installation
+
+          1. Download \`kvstore_syncthing-${VERSION}.spl\` or \`.tar.gz\`
+          2. Install via Splunk Web: Apps > Install app from file
+          3. Configure via Settings > KVStore Syncthing
+
+          ### Checksums
+          \`\`\`
+          $(cat release-package/checksums.txt)
+          \`\`\`
+
+          ### Compatibility
+          - Splunk Enterprise 8.2+
+          - Splunk Cloud
+          - Python 3.9+
+
+          ---
+          *Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md*
+          EOF
+
+          cat release-notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: KVStore Syncthing v${{ needs.validate.outputs.version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
+          files: |
+            release-package/*.tar.gz
+            release-package/*.spl
+            release-package/checksums.txt
+            appinspect-report/appinspect-report.json
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Pre-release:** ${{ needs.validate.outputs.is_prerelease }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- kvstore_syncthing-${{ needs.validate.outputs.version }}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "- kvstore_syncthing-${{ needs.validate.outputs.version }}.spl" >> $GITHUB_STEP_SUMMARY

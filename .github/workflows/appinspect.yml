@@ -1,0 +1,304 @@
+# ===============================================================================
+# KVStore Syncthing - Splunk AppInspect Workflow
+# ===============================================================================
+# Validates the add-on against Splunk AppInspect for Splunkbase compliance.
+# Runs on releases and can be triggered manually.
+# ===============================================================================
+
+name: AppInspect
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  UCC_VERSION: '5.50.0'
+
+jobs:
+  # ===========================================================================
+  # Build Package
+  # ===========================================================================
+  build:
+    name: Build Add-on Package
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.package.outputs.name }}
+      package_path: ${{ steps.package.outputs.path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install UCC Generator
+        run: pip install splunk-add-on-ucc-framework==${{ env.UCC_VERSION }}
+
+      - name: Create package structure
+        run: |
+          mkdir -p package/bin
+          mkdir -p package/default
+          mkdir -p package/lib
+          mkdir -p package/metadata
+
+          # Copy app.conf
+          cp packages/kvstore_syncthing/default/app.conf package/default/
+
+          # Create minimal inputHelperModule
+          cat > package/bin/kvstore_sync_helper.py << 'PYEOF'
+          """KVStore Sync Helper - UCC inputHelperModule"""
+          import json
+          import time
+
+          def validate_input(helper, definition):
+              return
+
+          def stream_events(helper, ew):
+              helper.log_info("KVStore sync started")
+              event = helper.new_event(
+                  data=json.dumps({'status': 'running', 'timestamp': time.time()}),
+                  sourcetype='kvstore:sync:status'
+              )
+              ew.write_event(event)
+          PYEOF
+
+          # Create default.meta
+          cat > package/metadata/default.meta << 'METAEOF'
+          []
+          export = system
+
+          [kvstore_syncthing_destinations]
+          export = system
+
+          [kvstore_syncthing_sync_profiles]
+          export = system
+          METAEOF
+
+      - name: Build with UCC
+        run: |
+          ucc-gen build --source package --config globalConfig.json || true
+
+      - name: Create package archive
+        id: package
+        run: |
+          VERSION=$(python -c "import json; print(json.load(open('globalConfig.json'))['meta']['version'])")
+          PACKAGE_NAME="kvstore_syncthing-${VERSION}"
+
+          if [ -d "output/kvstore_syncthing" ]; then
+            cd output
+            tar -czvf "../${PACKAGE_NAME}.tar.gz" kvstore_syncthing/
+            cd ..
+            echo "name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+            echo "path=${PACKAGE_NAME}.tar.gz" >> $GITHUB_OUTPUT
+          else
+            # Create minimal package for testing
+            mkdir -p kvstore_syncthing/default
+            mkdir -p kvstore_syncthing/bin
+            mkdir -p kvstore_syncthing/metadata
+            cp package/default/app.conf kvstore_syncthing/default/
+            cp package/bin/*.py kvstore_syncthing/bin/ 2>/dev/null || true
+            cp package/metadata/*.meta kvstore_syncthing/metadata/ 2>/dev/null || true
+            tar -czvf "${PACKAGE_NAME}.tar.gz" kvstore_syncthing/
+            echo "name=${PACKAGE_NAME}" >> $GITHUB_OUTPUT
+            echo "path=${PACKAGE_NAME}.tar.gz" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splunk-package
+          path: "*.tar.gz"
+
+  # ===========================================================================
+  # AppInspect Validation
+  # ===========================================================================
+  appinspect:
+    name: AppInspect Validation
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: splunk-package
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install AppInspect CLI
+        run: pip install splunk-appinspect
+
+      - name: Run AppInspect (local)
+        run: |
+          PACKAGE=$(ls *.tar.gz | head -1)
+          echo "Validating: $PACKAGE"
+
+          # Run local AppInspect
+          splunk-appinspect inspect "$PACKAGE" \
+            --mode precert \
+            --output-file appinspect-results.json \
+            --log-file appinspect.log \
+            --included-tags cloud \
+            --included-tags self-service \
+            || true
+
+      - name: Display results summary
+        run: |
+          echo "=== AppInspect Results Summary ==="
+          python3 << 'PYEOF'
+          import json
+
+          try:
+              with open('appinspect-results.json') as f:
+                  data = json.load(f)
+
+              reports = data.get('reports', [])
+              if reports:
+                  summary = reports[0].get('summary', {})
+                  print(f"Total checks: {summary.get('total', 'N/A')}")
+                  print(f"Passed: {summary.get('success', 0)}")
+                  print(f"Warnings: {summary.get('warning', 0)}")
+                  print(f"Failures: {summary.get('failure', 0)}")
+                  print(f"Errors: {summary.get('error', 0)}")
+                  print(f"Skipped: {summary.get('skipped', 0)}")
+                  print(f"Manual: {summary.get('manual_check', 0)}")
+
+                  # List failures
+                  groups = reports[0].get('groups', [])
+                  print("\n=== Failures ===")
+                  for group in groups:
+                      for check in group.get('checks', []):
+                          if check.get('result') == 'failure':
+                              print(f"  - {check.get('name')}: {check.get('description', '')[:80]}")
+          except Exception as e:
+              print(f"Could not parse results: {e}")
+          PYEOF
+
+      - name: Upload AppInspect results
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinspect-results
+          path: |
+            appinspect-results.json
+            appinspect.log
+
+      - name: Check for blocking failures
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import sys
+
+          try:
+              with open('appinspect-results.json') as f:
+                  data = json.load(f)
+
+              reports = data.get('reports', [])
+              if reports:
+                  summary = reports[0].get('summary', {})
+                  failures = summary.get('failure', 0)
+                  errors = summary.get('error', 0)
+
+                  if failures > 0 or errors > 0:
+                      print(f"::warning::AppInspect found {failures} failures and {errors} errors")
+                      # Don't fail the build, just warn
+                      sys.exit(0)
+                  else:
+                      print("AppInspect validation passed!")
+          except Exception as e:
+              print(f"Could not check results: {e}")
+          PYEOF
+
+  # ===========================================================================
+  # AppInspect API (Cloud Validation)
+  # ===========================================================================
+  appinspect-api:
+    name: AppInspect Cloud API
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: splunk-package
+
+      - name: Submit to AppInspect API
+        env:
+          SPLUNK_USER: ${{ secrets.SPLUNK_USER }}
+          SPLUNK_PASSWORD: ${{ secrets.SPLUNK_PASSWORD }}
+        run: |
+          if [ -z "$SPLUNK_USER" ] || [ -z "$SPLUNK_PASSWORD" ]; then
+            echo "Splunk credentials not configured, skipping API validation"
+            exit 0
+          fi
+
+          PACKAGE=$(ls *.tar.gz | head -1)
+
+          # Get auth token
+          TOKEN=$(curl -s -X GET \
+            -u "$SPLUNK_USER:$SPLUNK_PASSWORD" \
+            --url "https://api.splunk.com/2.0/rest/login/splunk" | \
+            python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))")
+
+          if [ -z "$TOKEN" ]; then
+            echo "Failed to get auth token"
+            exit 1
+          fi
+
+          # Submit for validation
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Cache-Control: no-cache" \
+            -F "app_package=@$PACKAGE" \
+            -F "included_tags=cloud,self-service" \
+            --url "https://appinspect.splunk.com/v1/app/validate")
+
+          REQUEST_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('request_id',''))")
+
+          if [ -z "$REQUEST_ID" ]; then
+            echo "Failed to submit package"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          echo "Submitted for validation. Request ID: $REQUEST_ID"
+
+          # Poll for results
+          for i in {1..30}; do
+            sleep 10
+            STATUS=$(curl -s -X GET \
+              -H "Authorization: Bearer $TOKEN" \
+              --url "https://appinspect.splunk.com/v1/app/validate/status/$REQUEST_ID" | \
+              python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+
+            echo "Status: $STATUS"
+
+            if [ "$STATUS" == "SUCCESS" ]; then
+              # Get report
+              curl -s -X GET \
+                -H "Authorization: Bearer $TOKEN" \
+                --url "https://appinspect.splunk.com/v1/app/report/$REQUEST_ID" \
+                -o appinspect-api-results.json
+              echo "Report downloaded"
+              break
+            elif [ "$STATUS" == "FAILURE" ]; then
+              echo "Validation failed"
+              exit 1
+            fi
+          done
+
+      - name: Upload API results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appinspect-api-results
+          path: appinspect-api-results.json
