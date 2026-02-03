@@ -1,0 +1,45 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/tasks/lint.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Concourse Task Definition
+# ===============================================================================
+
+---
+platform: linux
+
+image_resource:
+  type: docker-image
+  source:
+    repository: python
+    tag: "3.11-slim"
+
+inputs:
+  - name: source-code
+
+run:
+  path: bash
+  args:
+    - -exc
+    - |
+      cd source-code
+
+      # Install linting tools
+      pip install --quiet flake8 black isort mypy
+
+      echo "Running flake8..."
+      flake8 src/ tests/ --max-line-length=120 --ignore=E501,W503
+
+      echo "Checking black formatting..."
+      black --check src/ tests/
+
+      echo "Checking import sorting..."
+      isort --check-only src/ tests/
+
+      echo "Running mypy type checking..."
+      mypy src/ --ignore-missing-imports || true
+
+      echo "Linting completed successfully"

@@ -1,0 +1,58 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/tasks/live-tests.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Concourse Task Definition
+# ===============================================================================
+
+---
+platform: linux
+
+image_resource:
+  type: docker-image
+  source:
+    repository: python
+    tag: "3.11-slim"
+
+inputs:
+  - name: source-code
+
+outputs:
+  - name: test-results
+
+params:
+  SPLUNK_VERSION: ""
+  SPLUNK_HOST: ""
+  SPLUNK_PORT: "8089"
+  SPLUNK_TOKEN: ""
+  SPLUNK_VERIFY_SSL: "false"
+
+run:
+  path: bash
+  args:
+    - -exc
+    - |
+      cd source-code
+
+      # Install dependencies
+      pip install --quiet -r requirements-dev.txt
+      pip install --quiet -e .
+
+      # Mask sensitive values in output
+      set +x
+      export SPLUNK_TOKEN="${SPLUNK_TOKEN}"
+      set -x
+
+      # Run live tests against real Splunk instance
+      python -m pytest tests/live/ \
+        --tb=short \
+        --junitxml=../test-results/live-tests-${SPLUNK_VERSION}.xml \
+        -v \
+        --splunk-host=${SPLUNK_HOST} \
+        --splunk-port=${SPLUNK_PORT} \
+        --splunk-version=${SPLUNK_VERSION}
+
+      echo "Live tests completed for Splunk ${SPLUNK_VERSION}"

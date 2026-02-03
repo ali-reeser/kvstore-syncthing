@@ -1,0 +1,421 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/config/test-matrix.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Test Configuration
+#
+# KVStore Test Matrix Configuration
+# Defines all dimensions and values for comprehensive testing
+# ===============================================================================
+
+---
+# =============================================================================
+# Matrix Dimensions
+# =============================================================================
+matrix:
+  # ---------------------------------------------------------------------------
+  # Collection Sizes
+  # ---------------------------------------------------------------------------
+  collection_sizes:
+    - name: tiny
+      record_count: 100
+      description: "Quick smoke test"
+
+    - name: small
+      record_count: 1000
+      description: "Standard unit test size"
+
+    - name: medium
+      record_count: 10000
+      description: "Integration test size"
+
+    - name: large
+      record_count: 100000
+      description: "Performance test size"
+
+    - name: xlarge
+      record_count: 1000000
+      description: "Scale test size"
+      skip_in_ci: true  # Only run manually
+
+  # ---------------------------------------------------------------------------
+  # Sync Modes
+  # ---------------------------------------------------------------------------
+  sync_modes:
+    - full_sync
+    - incremental
+    - append_only
+    - master_slave
+
+  # ---------------------------------------------------------------------------
+  # Lookup Definition Types
+  # ---------------------------------------------------------------------------
+  lookup_types:
+    - name: kvstore
+      transforms_config:
+        external_type: kvstore
+
+    - name: kvstore_external
+      transforms_config:
+        external_type: kvstore
+        external_cmd: lookup
+
+    - name: kvstore_transform
+      transforms_config:
+        external_type: kvstore
+        fields_list: "_key, field1, field2"
+
+  # ---------------------------------------------------------------------------
+  # Case Sensitivity Configurations
+  # ---------------------------------------------------------------------------
+  case_sensitivity:
+    - name: case_sensitive
+      case_sensitive_match: true
+      test_data:
+        preserve_case: true
+
+    - name: case_insensitive
+      case_sensitive_match: false
+      test_data:
+        include_mixed_case: true
+
+    - name: normalize_lowercase
+      case_sensitive_match: true
+      transform:
+        normalize_to: lowercase
+        preserve_original: true
+
+    - name: normalize_uppercase
+      case_sensitive_match: true
+      transform:
+        normalize_to: uppercase
+        preserve_original: true
+
+  # ---------------------------------------------------------------------------
+  # Match Types
+  # ---------------------------------------------------------------------------
+  match_types:
+    - name: exact
+      match_type: null
+      test_queries:
+        - query: "field=value"
+          should_match: ["value"]
+          should_not_match: ["Value", "VALUE", "val"]
+
+    - name: wildcard
+      match_type: "WILDCARD(pattern)"
+      test_queries:
+        - query: "pattern=test*"
+          should_match: ["testing", "test123", "test"]
+          should_not_match: ["atest", "tes"]
+        - query: "pattern=*test"
+          should_match: ["mytest", "123test"]
+          should_not_match: ["testing", "tester"]
+        - query: "pattern=*test*"
+          should_match: ["mytesting", "atestb", "test"]
+          should_not_match: ["tes", "tst"]
+
+    - name: cidr_ipv4
+      match_type: "CIDR(ip_field)"
+      test_queries:
+        - cidr: "10.0.0.0/8"
+          should_match: ["10.1.2.3", "10.255.255.255"]
+          should_not_match: ["11.0.0.1", "192.168.1.1"]
+        - cidr: "192.168.0.0/16"
+          should_match: ["192.168.1.1", "192.168.255.255"]
+          should_not_match: ["192.169.0.1", "10.0.0.1"]
+
+    - name: cidr_ipv6
+      match_type: "CIDR(ip_field)"
+      test_queries:
+        - cidr: "2001:db8::/32"
+          should_match: ["2001:db8::1", "2001:db8:ffff::1"]
+          should_not_match: ["2001:db9::1", "::1"]
+
+  # ---------------------------------------------------------------------------
+  # Acceleration Configurations
+  # ---------------------------------------------------------------------------
+  accelerations:
+    - name: no_acceleration
+      accelerated: false
+
+    - name: primary_key_only
+      accelerated: true
+      accelerated_fields:
+        - field: _key
+          type: primary
+
+    - name: multi_field_index
+      accelerated: true
+      accelerated_fields:
+        - field: _key
+          type: primary
+        - field: user_id
+          type: index
+        - field: timestamp
+          type: index
+
+    - name: full_acceleration
+      accelerated: true
+      accelerated_fields:
+        - field: _key
+          type: primary
+        - field: user_id
+          type: index
+        - field: ip_address
+          type: index
+        - field: timestamp
+          type: index
+        - field: category
+          type: index
+
+# =============================================================================
+# Test Data Schemas
+# =============================================================================
+schemas:
+  # ---------------------------------------------------------------------------
+  # User Data Schema
+  # ---------------------------------------------------------------------------
+  users:
+    fields:
+      _key:
+        type: string
+        pattern: "USR-[0-9]{8}"
+      username:
+        type: string
+        generator: username
+        case_variants: true
+      email:
+        type: string
+        generator: email
+      department:
+        type: string
+        choices: ["IT", "HR", "Sales", "Engineering", "Marketing"]
+      created_at:
+        type: timestamp
+        range: last_90_days
+      last_login:
+        type: timestamp
+        range: last_30_days
+        nullable: 0.1
+      is_active:
+        type: boolean
+      score:
+        type: number
+        min: 0
+        max: 100
+
+  # ---------------------------------------------------------------------------
+  # IP Intelligence Schema
+  # ---------------------------------------------------------------------------
+  ip_intel:
+    fields:
+      _key:
+        type: string
+        generator: uuid
+      ip_range:
+        type: cidr
+        version: ipv4
+      threat_level:
+        type: string
+        choices: ["low", "medium", "high", "critical"]
+      category:
+        type: string
+        choices: ["malware", "phishing", "spam", "botnet", "scanner"]
+      first_seen:
+        type: timestamp
+        range: last_365_days
+      last_seen:
+        type: timestamp
+        range: last_30_days
+      confidence:
+        type: number
+        min: 0
+        max: 1
+        precision: 2
+
+  # ---------------------------------------------------------------------------
+  # Asset Inventory Schema
+  # ---------------------------------------------------------------------------
+  assets:
+    fields:
+      _key:
+        type: string
+        pattern: "ASSET-[A-Z]{2}-[0-9]{6}"
+      hostname:
+        type: string
+        generator: hostname
+        case_variants: true
+      ip_address:
+        type: ip
+        version: ipv4
+      mac_address:
+        type: string
+        pattern: "[0-9A-F]{2}(:[0-9A-F]{2}){5}"
+      os_type:
+        type: string
+        choices: ["Windows", "Linux", "macOS", "AIX", "Solaris"]
+      os_version:
+        type: string
+      location:
+        type: string
+        choices: ["NYC", "LAX", "CHI", "DFW", "SEA", "MIA"]
+      owner:
+        type: string
+        generator: username
+      tags:
+        type: array
+        items: string
+        max_length: 5
+
+  # ---------------------------------------------------------------------------
+  # Wildcard Pattern Schema
+  # ---------------------------------------------------------------------------
+  patterns:
+    fields:
+      _key:
+        type: string
+        generator: uuid
+      pattern:
+        type: string
+        generator: wildcard_pattern
+      pattern_type:
+        type: string
+        choices: ["prefix", "suffix", "contains", "regex"]
+      category:
+        type: string
+      priority:
+        type: number
+        min: 1
+        max: 100
+      action:
+        type: string
+        choices: ["allow", "block", "alert", "log"]
+
+# =============================================================================
+# Edge Cases
+# =============================================================================
+edge_cases:
+  # Special characters in data
+  special_characters:
+    - ""  # empty string
+    - " "  # single space
+    - "  "  # multiple spaces
+    - "\t"  # tab
+    - "\n"  # newline
+    - "hello\nworld"  # embedded newline
+    - "test\ttab"  # embedded tab
+    - "quotes\"here"  # embedded quotes
+    - "single'quote"  # single quote
+    - "back\\slash"  # backslash
+    - "emoji🎉here"  # emoji
+    - "日本語テスト"  # Japanese
+    - "Ü̈ñîcödé"  # accented characters
+    - "<script>alert('xss')</script>"  # XSS attempt
+    - "'; DROP TABLE users;--"  # SQL injection attempt
+
+  # Numeric edge cases
+  numeric_edge_cases:
+    - 0
+    - -1
+    - 2147483647  # max int32
+    - -2147483648  # min int32
+    - 9223372036854775807  # max int64
+    - 0.0
+    - -0.0
+    - 1.7976931348623157e+308  # max float
+    - 2.2250738585072014e-308  # min positive float
+    - "NaN"
+    - "Infinity"
+    - "-Infinity"
+
+  # Boolean variants
+  boolean_variants:
+    - true
+    - false
+    - "true"
+    - "false"
+    - "True"
+    - "False"
+    - "TRUE"
+    - "FALSE"
+    - 1
+    - 0
+    - "1"
+    - "0"
+    - "yes"
+    - "no"
+
+  # Null/empty variants
+  null_variants:
+    - null
+    - ""
+    - "null"
+    - "NULL"
+    - "None"
+    - "undefined"
+
+# =============================================================================
+# Performance Thresholds
+# =============================================================================
+performance:
+  # Maximum acceptable times (seconds)
+  thresholds:
+    tiny:
+      full_sync: 5
+      incremental: 2
+      verification: 1
+
+    small:
+      full_sync: 15
+      incremental: 5
+      verification: 3
+
+    medium:
+      full_sync: 60
+      incremental: 20
+      verification: 10
+
+    large:
+      full_sync: 300
+      incremental: 60
+      verification: 30
+
+    xlarge:
+      full_sync: 1800
+      incremental: 300
+      verification: 120
+
+  # Throughput expectations (records/second)
+  throughput:
+    minimum: 100
+    expected: 500
+    optimal: 1000
+
+# =============================================================================
+# Test Execution Settings
+# =============================================================================
+execution:
+  # Parallel execution settings
+  parallel:
+    max_workers: 4
+    isolate_by: ["collection_size", "sync_mode"]
+
+  # Retry settings
+  retry:
+    max_attempts: 3
+    backoff_seconds: 5
+
+  # Timeout settings
+  timeouts:
+    connection: 30
+    operation: 300
+    total: 3600
+
+  # Cleanup settings
+  cleanup:
+    delete_test_collections: true
+    delete_on_failure: false
