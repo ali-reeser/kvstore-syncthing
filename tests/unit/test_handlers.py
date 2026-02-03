@@ -528,7 +528,7 @@ class TestHandlerErrorHandling:
         success, message = handler.test_connection()
 
         assert success is False
-        assert "timeout" in message.lower()
+        assert "timed out" in message.lower()
 
 
 # =============================================================================

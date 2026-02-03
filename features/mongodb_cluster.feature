@@ -157,7 +157,7 @@ Feature: MongoDB Out-of-Band Cluster Management
     And the node is syncing historical data
     When I wait for sync with timeout of 300 seconds
     Then the operation should block until sync completes
-    Or timeout if sync takes too long
+    And timeout if sync takes too long
 
   # -----------------------------------------------------------------------------
   # User Story: Failover to OOB Node
@@ -176,8 +176,7 @@ Feature: MongoDB Out-of-Band Cluster Management
   @priority:high
   Scenario: Cannot promote when primary is available
     Given Splunk's primary node is healthy
-    And I attempt to promote an OOB node
-    Without force=true
+    And I attempt to promote an OOB node without force flag
     Then the operation should be blocked
     And an error should explain the current primary is available
 

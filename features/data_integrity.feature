@@ -152,7 +152,7 @@ Feature: Data Integrity and Verification
     And only 5 records differ
     When I compare the Merkle trees
     Then I should identify the 5 differing records
-    Without comparing all 10,000 record checksums individually
+    # Without comparing all 10,000 record checksums individually
 
   # -----------------------------------------------------------------------------
   # User Story: Parity Verification
