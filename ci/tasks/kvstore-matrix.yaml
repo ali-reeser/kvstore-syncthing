@@ -1,0 +1,62 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/tasks/kvstore-matrix.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Concourse Task Definition
+#
+# KVStore Test Matrix Task
+# Runs comprehensive tests across all KVStore configurations
+# ===============================================================================
+
+---
+platform: linux
+
+image_resource:
+  type: docker-image
+  source:
+    repository: python
+    tag: "3.11-slim"
+
+inputs:
+  - name: source-code
+
+outputs:
+  - name: test-results
+
+params:
+  SPLUNK_HOST: ""
+  SPLUNK_PORT: "8089"
+  SPLUNK_TOKEN: ""
+  TEST_MATRIX_CONFIG: ""
+  PARALLEL_WORKERS: "4"
+
+run:
+  path: bash
+  args:
+    - -exc
+    - |
+      cd source-code
+
+      # Install dependencies
+      pip install --quiet -r requirements-dev.txt
+
+      # Install the package
+      pip install --quiet -e .
+
+      # Run the KVStore test matrix
+      python -m pytest tests/matrix/ \
+        --tb=short \
+        --junitxml=../test-results/kvstore-matrix-results.xml \
+        --html=../test-results/kvstore-matrix-report.html \
+        --self-contained-html \
+        -n ${PARALLEL_WORKERS} \
+        --matrix-config=${TEST_MATRIX_CONFIG} \
+        -v
+
+      # Generate matrix summary
+      python ci/scripts/generate_matrix_report.py \
+        --results ../test-results/kvstore-matrix-results.xml \
+        --output ../test-results/matrix-summary.json

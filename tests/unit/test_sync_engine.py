@@ -436,6 +436,12 @@ class TestMerkleTree:
                 return hashlib.sha256(b"").hexdigest()
 
             hashes = checksums.copy()
+
+            # Handle single element by hashing with itself
+            if len(hashes) == 1:
+                combined = hashes[0] + hashes[0]
+                return hashlib.sha256(combined.encode()).hexdigest()
+
             while len(hashes) > 1:
                 next_level = []
                 for i in range(0, len(hashes), 2):

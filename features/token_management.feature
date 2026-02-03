@@ -418,7 +418,7 @@ Feature: Dynamic Token and Role Management
       | Sat 22:00    | Sun 06:00  |
     When rotation is scheduled for Sun 02:00
     Then rotation should be deferred until after maintenance window
-    Or rotation should occur before maintenance window starts
+    # Or rotation should occur before maintenance window starts
 
   # -----------------------------------------------------------------------------
   # User Story: Credential Rotation Notifications

@@ -1,0 +1,391 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/concourse/pipeline.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: CI/CD Pipeline Configuration
+#
+# Concourse CI Pipeline for KVStore Syncthing
+# Uses Vault for secrets management
+# Runs test matrix across Splunk versions and KVStore configurations
+# ===============================================================================
+
+---
+resource_types:
+  - name: pull-request
+    type: docker-image
+    source:
+      repository: teliaoss/github-pr-resource
+
+  - name: vault
+    type: docker-image
+    source:
+      repository: wfscheper/vault-resource
+
+resources:
+  # =============================================================================
+  # Source Code Resources
+  # =============================================================================
+  - name: source-code
+    type: git
+    icon: github
+    source:
+      uri: ((github.repo_uri))
+      branch: ((github.branch))
+      private_key: ((github.private_key))
+
+  - name: pull-request
+    type: pull-request
+    icon: source-pull
+    source:
+      repository: ((github.repository))
+      access_token: ((github.access_token))
+
+  # =============================================================================
+  # Vault Secrets
+  # =============================================================================
+  - name: vault-secrets
+    type: vault
+    source:
+      url: ((vault.url))
+      token: ((vault.token))
+      paths:
+        - secret/kvstore-syncthing
+
+  # =============================================================================
+  # Docker Images
+  # =============================================================================
+  - name: python-image
+    type: docker-image
+    source:
+      repository: python
+      tag: "3.11-slim"
+
+  - name: splunk-image
+    type: docker-image
+    source:
+      repository: splunk/splunk
+      tag: latest
+
+  - name: node-image
+    type: docker-image
+    source:
+      repository: node
+      tag: "18-alpine"
+
+  # =============================================================================
+  # Artifacts
+  # =============================================================================
+  - name: app-package
+    type: s3
+    source:
+      bucket: ((aws.artifacts_bucket))
+      region_name: ((aws.region))
+      access_key_id: ((aws.access_key))
+      secret_access_key: ((aws.secret_key))
+      regexp: kvstore-syncthing-(.*).tar.gz
+
+  # =============================================================================
+  # Notifications
+  # =============================================================================
+  - name: slack-alert
+    type: slack-notification
+    source:
+      url: ((slack.webhook_url))
+
+# =============================================================================
+# Jobs
+# =============================================================================
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint and Static Analysis
+  # ---------------------------------------------------------------------------
+  - name: lint
+    plan:
+      - get: source-code
+        trigger: true
+      - get: python-image
+
+      - task: python-lint
+        image: python-image
+        file: source-code/ci/tasks/lint.yaml
+
+      - task: js-lint
+        file: source-code/ci/tasks/js-lint.yaml
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ Lint failed for KVStore Syncthing"
+
+  # ---------------------------------------------------------------------------
+  # Unit Tests
+  # ---------------------------------------------------------------------------
+  - name: unit-tests
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [lint]
+      - get: python-image
+
+      - task: run-unit-tests
+        image: python-image
+        file: source-code/ci/tasks/unit-tests.yaml
+        params:
+          VCR_RECORD_MODE: none
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ Unit tests failed for KVStore Syncthing"
+
+  # ---------------------------------------------------------------------------
+  # Integration Tests (with VCR cassettes)
+  # ---------------------------------------------------------------------------
+  - name: integration-tests
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [unit-tests]
+      - get: python-image
+
+      - task: run-integration-tests
+        image: python-image
+        file: source-code/ci/tasks/integration-tests.yaml
+        params:
+          VCR_RECORD_MODE: none
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ Integration tests failed for KVStore Syncthing"
+
+  # ---------------------------------------------------------------------------
+  # Live Tests Matrix
+  # ---------------------------------------------------------------------------
+  - name: live-tests-splunk-9.0
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [integration-tests]
+      - get: vault-secrets
+
+      - task: run-live-tests
+        file: source-code/ci/tasks/live-tests.yaml
+        params:
+          SPLUNK_VERSION: "9.0"
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-dev:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-dev:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-dev:token))
+
+  - name: live-tests-splunk-9.1
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [integration-tests]
+      - get: vault-secrets
+
+      - task: run-live-tests
+        file: source-code/ci/tasks/live-tests.yaml
+        params:
+          SPLUNK_VERSION: "9.1"
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-dev:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-dev:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-dev:token))
+
+  - name: live-tests-splunk-9.2
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [integration-tests]
+      - get: vault-secrets
+
+      - task: run-live-tests
+        file: source-code/ci/tasks/live-tests.yaml
+        params:
+          SPLUNK_VERSION: "9.2"
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-dev:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-dev:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-dev:token))
+
+  - name: live-tests-splunk-9.3
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [integration-tests]
+      - get: vault-secrets
+
+      - task: run-live-tests
+        file: source-code/ci/tasks/live-tests.yaml
+        params:
+          SPLUNK_VERSION: "9.3"
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-dev:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-dev:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-dev:token))
+
+  # ---------------------------------------------------------------------------
+  # KVStore Test Matrix
+  # ---------------------------------------------------------------------------
+  - name: kvstore-matrix-tests
+    plan:
+      - get: source-code
+        trigger: true
+        passed:
+          - live-tests-splunk-9.0
+          - live-tests-splunk-9.1
+          - live-tests-splunk-9.2
+          - live-tests-splunk-9.3
+      - get: vault-secrets
+
+      - task: run-kvstore-matrix
+        file: source-code/ci/tasks/kvstore-matrix.yaml
+        params:
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-dev:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-dev:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-dev:token))
+          TEST_MATRIX_CONFIG: source-code/ci/config/test-matrix.yaml
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ KVStore matrix tests failed"
+
+  # ---------------------------------------------------------------------------
+  # Build Package
+  # ---------------------------------------------------------------------------
+  - name: build
+    plan:
+      - get: source-code
+        trigger: true
+        passed: [kvstore-matrix-tests]
+      - get: python-image
+      - get: node-image
+
+      - task: build-frontend
+        image: node-image
+        file: source-code/ci/tasks/build-frontend.yaml
+
+      - task: build-ucc-package
+        image: python-image
+        file: source-code/ci/tasks/build-ucc.yaml
+
+      - put: app-package
+        params:
+          file: build-output/kvstore-syncthing-*.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Staging
+  # ---------------------------------------------------------------------------
+  - name: deploy-staging
+    plan:
+      - get: source-code
+        passed: [build]
+      - get: app-package
+        trigger: true
+        passed: [build]
+      - get: vault-secrets
+
+      - task: deploy-to-staging
+        file: source-code/ci/tasks/deploy.yaml
+        params:
+          ENVIRONMENT: staging
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-staging:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-staging:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-staging:token))
+
+    on_success:
+      put: slack-alert
+      params:
+        text: "✅ Deployed to staging successfully"
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ Staging deployment failed"
+
+  # ---------------------------------------------------------------------------
+  # Smoke Tests on Staging
+  # ---------------------------------------------------------------------------
+  - name: smoke-tests
+    plan:
+      - get: source-code
+        passed: [deploy-staging]
+      - get: app-package
+        trigger: true
+        passed: [deploy-staging]
+      - get: vault-secrets
+
+      - task: run-smoke-tests
+        file: source-code/ci/tasks/smoke-tests.yaml
+        params:
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-staging:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-staging:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-staging:token))
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Production (Manual Gate)
+  # ---------------------------------------------------------------------------
+  - name: deploy-production
+    plan:
+      - get: source-code
+        passed: [smoke-tests]
+      - get: app-package
+        passed: [smoke-tests]
+      - get: vault-secrets
+
+      - task: deploy-to-production
+        file: source-code/ci/tasks/deploy.yaml
+        params:
+          ENVIRONMENT: production
+          SPLUNK_HOST: ((vault:secret/kvstore-syncthing/splunk-prod:host))
+          SPLUNK_PORT: ((vault:secret/kvstore-syncthing/splunk-prod:port))
+          SPLUNK_TOKEN: ((vault:secret/kvstore-syncthing/splunk-prod:token))
+
+    on_success:
+      put: slack-alert
+      params:
+        text: "🚀 Deployed to production successfully"
+
+    on_failure:
+      put: slack-alert
+      params:
+        text: "❌ Production deployment failed - initiating rollback"
+
+# =============================================================================
+# Groups
+# =============================================================================
+groups:
+  - name: all
+    jobs:
+      - lint
+      - unit-tests
+      - integration-tests
+      - live-tests-splunk-9.0
+      - live-tests-splunk-9.1
+      - live-tests-splunk-9.2
+      - live-tests-splunk-9.3
+      - kvstore-matrix-tests
+      - build
+      - deploy-staging
+      - smoke-tests
+      - deploy-production
+
+  - name: tests
+    jobs:
+      - lint
+      - unit-tests
+      - integration-tests
+      - live-tests-splunk-9.0
+      - live-tests-splunk-9.1
+      - live-tests-splunk-9.2
+      - live-tests-splunk-9.3
+      - kvstore-matrix-tests
+
+  - name: deploy
+    jobs:
+      - build
+      - deploy-staging
+      - smoke-tests
+      - deploy-production

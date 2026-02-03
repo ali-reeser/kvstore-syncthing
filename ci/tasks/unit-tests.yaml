@@ -1,0 +1,51 @@
+# ===============================================================================
+# PROVENANCE TRACKING
+# ===============================================================================
+# File: ci/tasks/unit-tests.yaml
+# Created: 2026-02-03
+# Author: Claude (AI Assistant - claude-opus-4-5-20251101)
+# Session: claude/kvstore-sync-solution-vPJQI
+# Type: Concourse Task Definition
+# ===============================================================================
+
+---
+platform: linux
+
+image_resource:
+  type: docker-image
+  source:
+    repository: python
+    tag: "3.11-slim"
+
+inputs:
+  - name: source-code
+
+outputs:
+  - name: test-results
+  - name: coverage-report
+
+params:
+  VCR_RECORD_MODE: "none"
+
+run:
+  path: bash
+  args:
+    - -exc
+    - |
+      cd source-code
+
+      # Install dependencies
+      pip install --quiet -r requirements-dev.txt
+      pip install --quiet -e .
+
+      # Run unit tests with coverage
+      python -m pytest tests/unit/ \
+        --tb=short \
+        --junitxml=../test-results/unit-tests.xml \
+        --cov=src/kvstore_syncthing \
+        --cov-report=html:../coverage-report \
+        --cov-report=xml:../test-results/coverage.xml \
+        --cov-fail-under=80 \
+        -v
+
+      echo "Unit tests completed"
