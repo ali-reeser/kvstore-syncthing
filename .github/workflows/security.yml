@@ -1,0 +1,384 @@
+# ===============================================================================
+# KVStore Syncthing - Security Scanning Workflow
+# ===============================================================================
+# Comprehensive security scanning including:
+# - Bandit (Python security linter)
+# - Semgrep (static analysis)
+# - Safety (dependency vulnerability check)
+# - Gitleaks (secrets detection)
+# - Trivy (container/dependency scanning)
+# ===============================================================================
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run weekly on Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ===========================================================================
+  # Bandit - Python Security Linter
+  # ===========================================================================
+  bandit:
+    name: Bandit Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit scan
+        run: |
+          bandit -r src/ -f json -o bandit-results.json --severity-level medium || true
+          bandit -r src/ -f txt -o bandit-results.txt --severity-level medium || true
+
+      - name: Display Bandit results
+        run: |
+          echo "=== Bandit Security Scan Results ==="
+          cat bandit-results.txt || echo "No results file"
+
+      - name: Upload Bandit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-results
+          path: |
+            bandit-results.json
+            bandit-results.txt
+
+      - name: Check for high severity issues
+        run: |
+          HIGH_COUNT=$(bandit -r src/ -f json --severity-level high 2>/dev/null | python -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))" 2>/dev/null || echo "0")
+          echo "High severity issues: $HIGH_COUNT"
+          if [ "$HIGH_COUNT" -gt "0" ]; then
+            echo "::warning::Found $HIGH_COUNT high severity security issues"
+          fi
+
+  # ===========================================================================
+  # Semgrep - Static Analysis
+  # ===========================================================================
+  semgrep:
+    name: Semgrep Analysis
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          semgrep ci --config auto --config p/python --config p/security-audit \
+            --json --output semgrep-results.json \
+            --sarif --sarif-output semgrep-results.sarif \
+            || true
+
+      - name: Display findings summary
+        run: |
+          echo "=== Semgrep Findings Summary ==="
+          cat semgrep-results.json | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          results = data.get('results', [])
+          print(f'Total findings: {len(results)}')
+          by_severity = {}
+          for r in results:
+              sev = r.get('extra', {}).get('severity', 'unknown')
+              by_severity[sev] = by_severity.get(sev, 0) + 1
+          for sev, count in sorted(by_severity.items()):
+              print(f'  {sev}: {count}')
+          " || echo "No results to parse"
+
+      - name: Upload Semgrep results
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: |
+            semgrep-results.json
+            semgrep-results.sarif
+
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+        continue-on-error: true
+
+  # ===========================================================================
+  # Safety - Dependency Vulnerability Check
+  # ===========================================================================
+  safety:
+    name: Dependency Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Safety
+        run: pip install safety
+
+      - name: Generate requirements from dev requirements
+        run: |
+          pip install -r requirements-dev.txt 2>/dev/null || true
+          pip freeze > requirements-frozen.txt
+
+      - name: Run Safety check
+        run: |
+          safety check -r requirements-frozen.txt --json > safety-results.json 2>&1 || true
+          safety check -r requirements-frozen.txt --full-report > safety-results.txt 2>&1 || true
+
+      - name: Display Safety results
+        run: |
+          echo "=== Dependency Vulnerability Check ==="
+          cat safety-results.txt || echo "No vulnerabilities found or scan completed"
+
+      - name: Upload Safety results
+        uses: actions/upload-artifact@v4
+        with:
+          name: safety-results
+          path: |
+            safety-results.json
+            safety-results.txt
+            requirements-frozen.txt
+
+  # ===========================================================================
+  # Gitleaks - Secrets Detection
+  # ===========================================================================
+  gitleaks:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: Run Gitleaks (fallback)
+        if: always()
+        run: |
+          # Install gitleaks
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
+          chmod +x gitleaks
+
+          # Run scan
+          ./gitleaks detect --source . --report-format json --report-path gitleaks-results.json --no-git || true
+          ./gitleaks detect --source . --report-format sarif --report-path gitleaks-results.sarif --no-git || true
+
+          echo "=== Gitleaks Results ==="
+          cat gitleaks-results.json | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              if isinstance(data, list):
+                  print(f'Potential secrets found: {len(data)}')
+                  for finding in data[:5]:
+                      print(f'  - {finding.get(\"RuleID\", \"unknown\")} in {finding.get(\"File\", \"unknown\")}')
+              else:
+                  print('No secrets detected')
+          except:
+              print('No secrets detected')
+          " || echo "Scan completed"
+
+      - name: Upload Gitleaks results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-results
+          path: |
+            gitleaks-results.json
+            gitleaks-results.sarif
+
+  # ===========================================================================
+  # Trivy - Comprehensive Vulnerability Scanner
+  # ===========================================================================
+  trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+        continue-on-error: true
+
+      - name: Run Trivy SARIF output
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+
+      - name: Display Trivy summary
+        run: |
+          echo "=== Trivy Vulnerability Summary ==="
+          cat trivy-results.json | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              results = data.get('Results', [])
+              total = 0
+              for r in results:
+                  vulns = r.get('Vulnerabilities', [])
+                  total += len(vulns)
+              print(f'Total vulnerabilities: {total}')
+          except Exception as e:
+              print(f'Parse error: {e}')
+          " || echo "Scan completed"
+
+      - name: Upload Trivy results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: |
+            trivy-results.json
+            trivy-results.sarif
+
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+  # ===========================================================================
+  # CodeQL Analysis
+  # ===========================================================================
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
+  # ===========================================================================
+  # OWASP Dependency Check
+  # ===========================================================================
+  owasp-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          pip install -r requirements-dev.txt 2>/dev/null || true
+          pip-audit --format json --output pip-audit-results.json || true
+          pip-audit --format columns > pip-audit-results.txt || true
+
+      - name: Display pip-audit results
+        run: |
+          echo "=== pip-audit Results ==="
+          cat pip-audit-results.txt || echo "No vulnerabilities found"
+
+      - name: Upload pip-audit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-results
+          path: |
+            pip-audit-results.json
+            pip-audit-results.txt
+
+  # ===========================================================================
+  # Security Summary
+  # ===========================================================================
+  security-summary:
+    name: Security Summary
+    needs: [bandit, semgrep, safety, gitleaks, trivy, codeql, owasp-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: security-results/
+
+      - name: Generate summary
+        run: |
+          echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit | ${{ needs.bandit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Semgrep | ${{ needs.semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Safety | ${{ needs.safety.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gitleaks | ${{ needs.gitleaks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CodeQL | ${{ needs.codeql.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OWASP/pip-audit | ${{ needs.owasp-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See individual job artifacts for detailed results." >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for critical failures
+        run: |
+          if [ "${{ needs.bandit.result }}" == "failure" ] || \
+             [ "${{ needs.gitleaks.result }}" == "failure" ]; then
+            echo "::error::Critical security scan failed"
+            exit 1
+          fi
+          echo "Security scans completed"

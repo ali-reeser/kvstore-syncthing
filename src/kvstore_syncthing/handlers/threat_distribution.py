@@ -750,8 +750,8 @@ class ThreatDistributionHandler:
         # Format output
         content = self._format_output(filtered, config, format_to_use)
 
-        # Calculate ETag
-        etag = hashlib.md5(content.encode()).hexdigest()
+        # Calculate ETag (MD5 for cache validation, not security)
+        etag = hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
 
         # Update cache
         if config.cache_ttl_seconds > 0:

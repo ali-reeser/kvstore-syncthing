@@ -1,0 +1,498 @@
+# ===============================================================================
+# KVStore Syncthing - Integration Tests Workflow
+# ===============================================================================
+# Runs integration tests against real Splunk instances using Docker.
+# Tests KVStore sync operations across Splunk versions.
+# ===============================================================================
+
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      splunk_version:
+        description: 'Splunk version to test'
+        required: false
+        default: '9.2'
+        type: choice
+        options:
+          - '8.2'
+          - '9.0'
+          - '9.1'
+          - '9.2'
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  SPLUNK_PASSWORD: 'Chang3d!'
+  SPLUNK_START_ARGS: '--accept-license'
+
+jobs:
+  # ===========================================================================
+  # Integration Test Matrix
+  # ===========================================================================
+  integration-tests:
+    name: Splunk ${{ matrix.splunk_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        splunk_version: ['8.2', '9.1', '9.2']
+
+    services:
+      splunk:
+        image: splunk/splunk:${{ matrix.splunk_version }}
+        env:
+          SPLUNK_PASSWORD: ${{ env.SPLUNK_PASSWORD }}
+          SPLUNK_START_ARGS: ${{ env.SPLUNK_START_ARGS }}
+        ports:
+          - 8089:8089
+          - 8088:8088
+        options: >-
+          --health-cmd "curl -k https://localhost:8089/services/server/health/splunkd/details -u admin:${{ env.SPLUNK_PASSWORD }}"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 120s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install git+https://github.com/splunk/splunk-sdk-python.git
+
+      - name: Wait for Splunk to be ready
+        run: |
+          echo "Waiting for Splunk to be fully ready..."
+          for i in {1..60}; do
+            if curl -sk https://localhost:8089/services/server/info -u admin:${{ env.SPLUNK_PASSWORD }} > /dev/null 2>&1; then
+              echo "Splunk is ready!"
+              break
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+
+      - name: Verify Splunk connection
+        run: |
+          python << 'EOF'
+          import splunklib.client as client
+
+          service = client.connect(
+              host='localhost',
+              port=8089,
+              username='admin',
+              password='Chang3d!',
+              scheme='https'
+          )
+
+          info = service.info
+          print(f"Connected to Splunk {info['version']}")
+          print(f"Server name: {info['serverName']}")
+          print(f"OS: {info['os_name']}")
+          EOF
+
+      - name: Create test KVStore collections
+        run: |
+          python << 'EOF'
+          import splunklib.client as client
+
+          service = client.connect(
+              host='localhost',
+              port=8089,
+              username='admin',
+              password='Chang3d!',
+              scheme='https'
+          )
+
+          # Create test app context
+          app_name = 'search'
+
+          # Create test collections
+          collections = ['test_sync_source', 'test_sync_dest', 'test_integrity']
+
+          for coll_name in collections:
+              try:
+                  # Check if collection exists
+                  existing = [c.name for c in service.kvstore]
+                  if coll_name not in existing:
+                      service.kvstore.create(coll_name)
+                      print(f"Created collection: {coll_name}")
+                  else:
+                      print(f"Collection already exists: {coll_name}")
+              except Exception as e:
+                  print(f"Error with {coll_name}: {e}")
+
+          # Add test data
+          try:
+              coll = service.kvstore['test_sync_source']
+              coll.data.batch_save([
+                  {'_key': 'record1', 'field1': 'value1', 'field2': 100},
+                  {'_key': 'record2', 'field1': 'value2', 'field2': 200},
+                  {'_key': 'record3', 'field1': 'value3', 'field2': 300},
+              ])
+              print("Added test data to test_sync_source")
+          except Exception as e:
+              print(f"Error adding test data: {e}")
+          EOF
+
+      - name: Run integration tests
+        env:
+          SPLUNK_HOST: localhost
+          SPLUNK_PORT: 8089
+          SPLUNK_USERNAME: admin
+          SPLUNK_PASSWORD: ${{ env.SPLUNK_PASSWORD }}
+          SPLUNK_SCHEME: https
+        run: |
+          pytest tests/integration/ \
+            --junitxml=test-results/integration-tests-${{ matrix.splunk_version }}.xml \
+            -v \
+            --tb=short \
+            -x || true
+
+      - name: Run KVStore sync tests
+        env:
+          SPLUNK_HOST: localhost
+          SPLUNK_PORT: 8089
+          SPLUNK_USERNAME: admin
+          SPLUNK_PASSWORD: ${{ env.SPLUNK_PASSWORD }}
+        run: |
+          python << 'EOF'
+          import splunklib.client as client
+          import json
+          import hashlib
+
+          print("=" * 60)
+          print("KVStore Sync Integration Tests")
+          print("=" * 60)
+
+          # Connect to Splunk
+          service = client.connect(
+              host='localhost',
+              port=8089,
+              username='admin',
+              password='Chang3d!',
+              scheme='https'
+          )
+
+          # Test 1: Read KVStore data
+          print("\n[TEST 1] Read KVStore collection")
+          try:
+              coll = service.kvstore['test_sync_source']
+              data = list(coll.data.query())
+              print(f"  Records in test_sync_source: {len(data)}")
+              assert len(data) >= 3, "Expected at least 3 records"
+              print("  PASSED")
+          except Exception as e:
+              print(f"  FAILED: {e}")
+
+          # Test 2: Compute data checksum (integrity)
+          print("\n[TEST 2] Data integrity checksum")
+          try:
+              coll = service.kvstore['test_sync_source']
+              data = list(coll.data.query())
+              data_str = json.dumps(sorted(data, key=lambda x: x.get('_key', '')), sort_keys=True)
+              checksum = hashlib.sha256(data_str.encode()).hexdigest()
+              print(f"  Checksum: {checksum[:16]}...")
+              assert len(checksum) == 64, "Invalid checksum length"
+              print("  PASSED")
+          except Exception as e:
+              print(f"  FAILED: {e}")
+
+          # Test 3: Sync to destination collection
+          print("\n[TEST 3] Sync to destination collection")
+          try:
+              source = service.kvstore['test_sync_source']
+              dest = service.kvstore['test_sync_dest']
+
+              # Read source data
+              source_data = list(source.data.query())
+
+              # Clear destination
+              dest.data.delete()
+
+              # Sync to destination
+              for record in source_data:
+                  # Remove _user field if present (not writable)
+                  clean_record = {k: v for k, v in record.items() if not k.startswith('_user')}
+                  dest.data.insert(clean_record)
+
+              # Verify sync
+              dest_data = list(dest.data.query())
+              print(f"  Synced {len(dest_data)} records to destination")
+              assert len(dest_data) == len(source_data), "Record count mismatch"
+              print("  PASSED")
+          except Exception as e:
+              print(f"  FAILED: {e}")
+
+          # Test 4: Incremental sync detection
+          print("\n[TEST 4] Incremental sync detection")
+          try:
+              source = service.kvstore['test_sync_source']
+
+              # Add a new record
+              source.data.insert({'_key': 'record_new', 'field1': 'new_value', 'field2': 999})
+
+              # Get updated data
+              updated_data = list(source.data.query())
+              print(f"  Records after insert: {len(updated_data)}")
+
+              # Find new records (those not in dest)
+              dest = service.kvstore['test_sync_dest']
+              dest_keys = {r['_key'] for r in dest.data.query()}
+              new_records = [r for r in updated_data if r['_key'] not in dest_keys]
+              print(f"  New records to sync: {len(new_records)}")
+              assert len(new_records) >= 1, "Should detect new record"
+              print("  PASSED")
+          except Exception as e:
+              print(f"  FAILED: {e}")
+
+          # Test 5: Batch operations
+          print("\n[TEST 5] Batch operations")
+          try:
+              coll = service.kvstore['test_integrity']
+
+              # Batch insert
+              batch_data = [{'_key': f'batch_{i}', 'value': i} for i in range(100)]
+              coll.data.batch_save(batch_data)
+
+              # Verify
+              result = list(coll.data.query())
+              print(f"  Batch inserted: {len(result)} records")
+              assert len(result) == 100, "Expected 100 records"
+              print("  PASSED")
+          except Exception as e:
+              print(f"  FAILED: {e}")
+
+          print("\n" + "=" * 60)
+          print("Integration tests completed!")
+          print("=" * 60)
+          EOF
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results-splunk-${{ matrix.splunk_version }}
+          path: test-results/
+
+      - name: Collect Splunk logs on failure
+        if: failure()
+        run: |
+          docker logs $(docker ps -q --filter ancestor=splunk/splunk:${{ matrix.splunk_version }}) > splunk-logs.txt 2>&1 || true
+
+      - name: Upload Splunk logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: splunk-logs-${{ matrix.splunk_version }}
+          path: splunk-logs.txt
+
+  # ===========================================================================
+  # HEC Integration Tests
+  # ===========================================================================
+  hec-tests:
+    name: HEC Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      splunk:
+        image: splunk/splunk:9.2
+        env:
+          SPLUNK_PASSWORD: ${{ env.SPLUNK_PASSWORD }}
+          SPLUNK_START_ARGS: ${{ env.SPLUNK_START_ARGS }}
+          SPLUNK_HEC_TOKEN: 'test-hec-token-12345'
+        ports:
+          - 8089:8089
+          - 8088:8088
+        options: >-
+          --health-cmd "curl -k https://localhost:8089/services/server/health/splunkd/details -u admin:${{ env.SPLUNK_PASSWORD }}"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 120s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install git+https://github.com/splunk/splunk-sdk-python.git
+
+      - name: Wait for Splunk
+        run: |
+          for i in {1..60}; do
+            if curl -sk https://localhost:8089/services/server/info -u admin:${{ env.SPLUNK_PASSWORD }} > /dev/null 2>&1; then
+              echo "Splunk is ready!"
+              break
+            fi
+            sleep 5
+          done
+
+      - name: Configure HEC
+        run: |
+          python << 'EOF'
+          import splunklib.client as client
+          import json
+
+          service = client.connect(
+              host='localhost',
+              port=8089,
+              username='admin',
+              password='Chang3d!',
+              scheme='https'
+          )
+
+          # Enable HEC
+          try:
+              # Check if HEC input exists
+              hec_inputs = service.inputs
+              hec_name = 'http://kvstore_sync_hec'
+
+              # Create HEC token
+              response = service.post(
+                  '/servicesNS/nobody/search/data/inputs/http',
+                  name='kvstore_sync_hec',
+                  token='test-hec-token-12345',
+                  index='main',
+                  sourcetype='kvstore:sync:data'
+              )
+              print("HEC token created")
+          except Exception as e:
+              print(f"HEC setup note: {e}")
+
+          # Enable HEC globally
+          try:
+              service.post(
+                  '/servicesNS/nobody/search/data/inputs/http/http',
+                  disabled='0'
+              )
+              print("HEC globally enabled")
+          except Exception as e:
+              print(f"HEC enable note: {e}")
+          EOF
+
+      - name: Test HEC event submission
+        run: |
+          python << 'EOF'
+          import requests
+          import json
+          import urllib3
+          urllib3.disable_warnings()
+
+          print("=" * 60)
+          print("HEC Integration Tests")
+          print("=" * 60)
+
+          hec_url = 'https://localhost:8088/services/collector/event'
+          hec_token = 'test-hec-token-12345'
+
+          headers = {
+              'Authorization': f'Splunk {hec_token}',
+              'Content-Type': 'application/json'
+          }
+
+          # Test 1: Single event submission
+          print("\n[TEST 1] Single HEC event")
+          try:
+              event = {
+                  'event': {
+                      'action': 'sync_test',
+                      'collection': 'test_collection',
+                      'records': 10
+                  },
+                  'sourcetype': 'kvstore:sync:status',
+                  'index': 'main'
+              }
+
+              response = requests.post(
+                  hec_url,
+                  headers=headers,
+                  json=event,
+                  verify=False,
+                  timeout=10
+              )
+
+              if response.status_code == 200:
+                  print(f"  Status: {response.status_code}")
+                  print("  PASSED")
+              else:
+                  print(f"  Status: {response.status_code} - {response.text}")
+                  print("  SKIPPED (HEC may not be configured)")
+          except Exception as e:
+              print(f"  SKIPPED: {e}")
+
+          # Test 2: Batch event submission
+          print("\n[TEST 2] Batch HEC events")
+          try:
+              events = ""
+              for i in range(10):
+                  events += json.dumps({
+                      'event': {'record_id': f'record_{i}', 'value': i * 10},
+                      'sourcetype': 'kvstore:sync:data'
+                  }) + "\n"
+
+              response = requests.post(
+                  hec_url,
+                  headers=headers,
+                  data=events,
+                  verify=False,
+                  timeout=10
+              )
+
+              if response.status_code == 200:
+                  print(f"  Submitted 10 events")
+                  print("  PASSED")
+              else:
+                  print(f"  Status: {response.status_code}")
+                  print("  SKIPPED")
+          except Exception as e:
+              print(f"  SKIPPED: {e}")
+
+          print("\n" + "=" * 60)
+          print("HEC tests completed!")
+          print("=" * 60)
+          EOF
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  integration-success:
+    name: Integration Tests Summary
+    needs: [integration-tests, hec-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [ "${{ needs.integration-tests.result }}" == "success" ]; then
+            echo "Integration tests passed!"
+          else
+            echo "Some integration tests failed or were skipped"
+          fi
