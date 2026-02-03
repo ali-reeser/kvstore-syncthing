@@ -3,6 +3,16 @@
 # ===============================================================================
 # Runs integration tests against real Splunk instances using Docker.
 # Tests KVStore sync operations across Splunk versions.
+#
+# VERSION POLICY:
+# We ONLY test against Splunk versions currently supported by Splunk Inc.
+# See: tests/features/version_support_policy.feature for authoritative list
+# Source: https://endoflife.date/splunk
+#
+# CURRENT SUPPORTED VERSIONS (as of 2026-02-03):
+# - Splunk 10.0 (supported until 2027-07-28)
+# - Splunk 9.4  (supported until 2026-12-16)
+# - Splunk 9.3  (supported until 2026-07-24)
 # ===============================================================================
 
 name: Integration Tests
@@ -17,13 +27,12 @@ on:
       splunk_version:
         description: 'Splunk version to test'
         required: false
-        default: '9.2'
+        default: '10.0'
         type: choice
         options:
-          - '8.2'
-          - '9.0'
-          - '9.1'
-          - '9.2'
+          - '9.3'
+          - '9.4'
+          - '10.0'
 
 concurrency:
   group: integration-${{ github.workflow }}-${{ github.ref }}
@@ -44,7 +53,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        splunk_version: ['8.2', '9.1', '9.2']
+        # ONLY Splunk-supported versions per version_support_policy.feature
+        splunk_version: ['9.3', '9.4', '10.0']
 
     services:
       splunk:
@@ -314,7 +324,8 @@ jobs:
 
     services:
       splunk:
-        image: splunk/splunk:9.2
+        # Use latest supported Splunk version for HEC tests
+        image: splunk/splunk:10.0
         env:
           SPLUNK_PASSWORD: ${{ env.SPLUNK_PASSWORD }}
           SPLUNK_START_ARGS: ${{ env.SPLUNK_START_ARGS }}

@@ -3,6 +3,15 @@
 # ===============================================================================
 # Runs on every push and PR to validate code quality, run tests, and ensure
 # the add-on builds correctly with UCC framework.
+#
+# VERSION POLICY:
+# Python versions tested match Splunk's bundled Python and UCC requirements.
+# See: tests/features/version_support_policy.feature for authoritative list
+#
+# CURRENT SUPPORTED PYTHON VERSIONS (as of 2026-02-03):
+# - Python 3.11 (primary, bundled in Splunk 9.3+, 10.0+)
+# - Python 3.10 (bundled in Splunk 9.1+, 9.2+)
+# - Python 3.9  (minimum for UCC framework)
 # ===============================================================================
 
 name: CI
@@ -66,6 +75,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Python versions per version_support_policy.feature
+        # Must match UCC requirements (3.9+) and Splunk bundled versions
         python-version: ['3.9', '3.10', '3.11']
     steps:
       - name: Checkout code
