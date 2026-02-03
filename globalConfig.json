@@ -2,7 +2,7 @@
     "meta": {
         "name": "kvstore_syncthing",
         "displayName": "KVStore Syncthing",
-        "version": "1.0.0",
+        "version": "1.0.0-rc1",
         "restRoot": "kvstore_syncthing",
         "schemaVersion": "0.0.3"
     },
